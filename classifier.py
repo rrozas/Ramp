@@ -13,10 +13,10 @@ def sample_from_rotation_x( x ):
     y_extends = []
     for i in range(x.shape[0]):
         x_extends.extend([
-        np.array([x[i,:,:,0], x[i,:,:,1], x[i,:,:,2]]),
-        np.array([np.rot90(x[i,:,:,0]),np.rot90(x[i,:,:,1]), np.rot90(x[i,:,:,2])]),
-        np.array([np.rot90(x[i,:,:,0],2),np.rot90(x[i,:,:,1],2), np.rot90(x[i,:,:,2],2)]),
-        np.array([np.rot90(x[i,:,:,0],3),np.rot90(x[i,:,:,1],3), np.rot90(x[i,:,:,2],3)])
+        np.array([x[i,10:54,10:54,0], x[i,10:54,10:54,1], x[i,10:54,10:54,2]]),
+        np.array([np.rot90(x[i,10:54,10:54,0]),np.rot90(x[i,10:54,10:54,1]), np.rot90(x[i,10:54,10:54,2])]),
+        np.array([np.rot90(x[i,10:54,10:54,0],2),np.rot90(x[i,10:54,10:54,1],2), np.rot90(x[i,10:54,10:54,2],2)]),
+        np.array([np.rot90(x[i,10:54,10:54,0],3),np.rot90(x[i,10:54,10:54,1],3), np.rot90(x[i,10:54,10:54,2],3)])
         ])
     return np.array(x_extends)
 
@@ -65,6 +65,15 @@ class EarlyStopping(object):
         nn.load_weights_from(self.best_weights)
 
 
+class FlipBatchIterator(BatchIterator):
+    def transform(self, Xb, yb):
+        Xb, yb = super(FlipBatchIterator, self).transform(Xb, yb)
+        # Flip half of the images in this batch at random:
+        bs = Xb.shape[0]
+        indices = np.random.choice(bs, bs / 2, replace=False)
+        Xb[indices] = Xb[indices, :, ::-1, :]
+        return Xb, yb
+    
 def build_model(hyper_parameters):
     net = NeuralNet(
         layers=[
@@ -80,7 +89,7 @@ def build_model(hyper_parameters):
             ('hidden5', layers.DenseLayer),
             ('output', layers.DenseLayer),
             ],
-        input_shape=(None, 3, 64, 64),
+        input_shape=(None, 3, 44, 44),
         use_label_encoder=True,
         verbose=1,
         on_epoch_finished = [EarlyStopping(patience=20, criterion='valid_accuracy', criterion_smaller_is_better=False)],
@@ -100,9 +109,10 @@ hyper_parameters = dict(
     hidden4_W=init.GlorotUniform(gain='relu'),
     hidden5_W=init.GlorotUniform(gain='relu'),
     output_W=init.GlorotUniform(),
-    batch_iterator_train=BatchIterator(batch_size=500)
+    batch_iterator_train=FlipBatchIterator(batch_size=256)
 
 )
+
 
 
 class Classifier(BaseEstimator):
