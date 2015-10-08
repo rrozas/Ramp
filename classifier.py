@@ -1,78 +1,64 @@
 import os
 os.environ["THEANO_FLAGS"] = "device=gpu"
+import theano
+ 
+import numpy as np
 from sklearn.base import BaseEstimator
-import os
 from lasagne import layers, nonlinearities, updates, init, objectives
 from lasagne.updates import nesterov_momentum
 from nolearn.lasagne import NeuralNet, BatchIterator
-import numpy as np
-from itertools import repeat
+from nolearn.lasagne.handlers import EarlyStopping
+import theano.tensor.nnet
+ 
 
-def sample_from_rotation_x( x ):
-    x_extends = []
-    y_extends = []
-    for i in range(x.shape[0]):
-        x_extends.extend([
-        np.array([x[i,10:54,10:54,0], x[i,10:54,10:54,1], x[i,10:54,10:54,2]]),
-        np.array([np.rot90(x[i,10:54,10:54,0]),np.rot90(x[i,10:54,10:54,1]), np.rot90(x[i,10:54,10:54,2])]),
-        np.array([np.rot90(x[i,10:54,10:54,0],2),np.rot90(x[i,10:54,10:54,1],2), np.rot90(x[i,10:54,10:54,2],2)]),
-        np.array([np.rot90(x[i,10:54,10:54,0],3),np.rot90(x[i,10:54,10:54,1],3), np.rot90(x[i,10:54,10:54,2],3)])
-        ])
-    return np.array(x_extends)
+def categorical_accuracy(predictions, targets):
+    """Computes the categorical accuracy between predictions and targets.
+    .. math:: L_i = \\mathbb{I}(t_i == p_i)
+    Parameters
+    ----------
+    predictions : Theano 2D tensor
+        Predictions in (0, 1), such as softmax output of a neural network,
+        with data points in rows and class probabilities in columns.
+    targets : Theano 2D tensor or 1D tensor
+        Either a vector of int giving the correct class index per data point
+        or a 2D tensor of 1 hot encoding of the correct class in the same
+        layout as predictions
+    Returns
+    -------
+    Theano 1D tensor
+        An expression for the item-wise categorical accuracy in {0, 1}
+    Notes
+    -----
+    This is a strictly non differential function as it includes an argmax.
+    This objective function should never be used with a gradient calculation.
+    It is intended as a convenience for validation and testing not training.
+    To obtain the average accuracy, call :func:`theano.tensor.mean()` on the
+    result, passing ``dtype=theano.config.floatX`` to compute the mean on GPU.
+    """
+    if targets.ndim == predictions.ndim:
+        targets = theano.tensor.argmax(targets, axis=targets.ndim-1)
+    elif targets.ndim != predictions.ndim - 1:
+        raise TypeError('rank mismatch between targets and predictions')
+    predictions = theano.tensor.argmax(predictions, axis=predictions.ndim-1)
 
-def sample_from_rotation_y(y):
-    y_extends = []
-    for i in y:
-        y_extends.extend( repeat( i ,4) )
-    return np.array(y_extends)
-
-class EarlyStopping(object):
-
-    def __init__(self, patience=100, criterion='valid_loss',
-                 criterion_smaller_is_better=True):
-        self.patience = patience
-        if criterion_smaller_is_better is True:
-            self.best_valid = np.inf
-        else:
-            self.best_valid = -np.inf
-        self.best_valid_epoch = 0
-        self.best_weights = None
-        self.criterion = criterion
-        self.criterion_smaller_is_better = criterion_smaller_is_better
-
-    def __call__(self, nn, train_history):
-        current_valid = train_history[-1][self.criterion]
-        current_epoch = train_history[-1]['epoch']
-        if self.criterion_smaller_is_better:
-            cond = current_valid < self.best_valid
-        else:
-            cond = current_valid > self.best_valid
-        if cond:
-            self.best_valid = current_valid
-            self.best_valid_epoch = current_epoch
-            self.best_weights = nn.get_all_params_values()
-        elif self.best_valid_epoch + self.patience < current_epoch:
-            if nn.verbose:
-                print("Early stopping.")
-                print("Best {:s} was {:.6f} at epoch {}.".format(
-                    self.criterion, self.best_valid, self.best_valid_epoch))
-            nn.load_weights_from(self.best_weights)
-            if nn.verbose:
-                print("Weights set.")
-            raise StopIteration()
-
-    def load_best_weights(self, nn, train_history):
-        nn.load_weights_from(self.best_weights)
-
-
+    return theano.tensor.eq(predictions, targets)
+ 
 class FlipBatchIterator(BatchIterator):
     def transform(self, Xb, yb):
         Xb, yb = super(FlipBatchIterator, self).transform(Xb, yb)
         # Flip half of the images in this batch at random:
         bs = Xb.shape[0]
         indices = np.random.choice(bs, bs / 2, replace=False)
-        Xb[indices] = Xb[indices, :, ::-1, :]
+        Xb[indices] = Xb[indices, :, ::-1]
+        
+        # Drop randomly half of the features in each batch:
+        bf = Xb.shape[2]
+        indices_features = np.random.choice(bf, bf / 2, replace=False)
+        Xb = Xb.transpose((2, 0, 1, 3))
+        Xb[indices_features] = Xb[indices_features]
+        Xb = Xb.transpose((1, 2, 0, 3))
         return Xb, yb
+
     
 def build_model(hyper_parameters):
     net = NeuralNet(
@@ -85,68 +71,63 @@ def build_model(hyper_parameters):
             ('conv3', layers.Conv2DLayer),
             ('pool3', layers.MaxPool2DLayer),
             ('hidden4', layers.DenseLayer),
-            ('dropout1', layers.DropoutLayer),
             ('hidden5', layers.DenseLayer),
+            ('hidden6', layers.DenseLayer),
             ('output', layers.DenseLayer),
             ],
         input_shape=(None, 3, 44, 44),
         use_label_encoder=True,
         verbose=1,
-        on_epoch_finished = [EarlyStopping(patience=20, criterion='valid_accuracy', criterion_smaller_is_better=False)],
         **hyper_parameters
         )
     return net
 
 hyper_parameters = dict(
     conv1_num_filters=64, conv1_filter_size=(3, 3), pool1_pool_size=(2, 2),
-    conv2_num_filters=128, conv2_filter_size=(2, 2), pool2_pool_size=(2, 2),
-    conv3_num_filters=128, conv3_filter_size=(2, 2), pool3_pool_size=(2, 2),
-    hidden4_num_units=500, hidden5_num_units=500,
-    output_num_units=18, output_nonlinearity=nonlinearities.softmax,
-    update_learning_rate=0.01,
-    update_momentum=0.9,
-    max_epochs=100,dropout1_p=0.5,
+    conv2_num_filters=256, conv2_filter_size=(2, 2), pool2_pool_size=(2, 2),
+    conv3_num_filters=128, conv3_filter_size=(2, 2), pool3_pool_size=(4, 4),
+    hidden4_num_units=1024,
+    hidden4_nonlinearity=nonlinearities.rectify,
     hidden4_W=init.GlorotUniform(gain='relu'),
+    hidden5_num_units=512,
+    hidden5_nonlinearity=nonlinearities.leaky_rectify,
     hidden5_W=init.GlorotUniform(gain='relu'),
-    output_W=init.GlorotUniform(),
-    batch_iterator_train=FlipBatchIterator(batch_size=256)
-
+    hidden6_num_units=256,
+    hidden6_nonlinearity=nonlinearities.very_leaky_rectify,
+    hidden6_W=init.GlorotUniform(gain='relu'),
+    output_num_units=18,
+    output_nonlinearity=nonlinearities.softmax,
+    update_learning_rate=0.01,
+    update=updates.adagrad,
+    max_epochs=200,
+    on_epoch_finished=[EarlyStopping(patience=20, criterion='valid_accuracy', criterion_smaller_is_better=False)],
+    objective_loss_function=categorical_accuracy,
+    batch_iterator_train=FlipBatchIterator(batch_size=100)
 )
-
-
-
+    
 class Classifier(BaseEstimator):
-
+ 
     def __init__(self):
         self.net = build_model(hyper_parameters)
-
+ 
     def preprocess(self, X):
         X = (X / 255.)
         X = X.astype(np.float32)
-        X = sample_from_rotation_x( X )
-        #X = X.transpose((0, 3, 1, 2))
-        return X
-
-    def simple_preprocess(self, X):
-        X = (X / 255.)
-        X = X.astype(np.float32)
-        #X = sample_from_rotation_x( X )
+        X = X[:, 10:54, 10:54, :]
         X = X.transpose((0, 3, 1, 2))
         return X
-    
-    def preprocess_y(self, y):
-        y = sample_from_rotation_y(y)
-        return y.astype(np.int32)
-
+ 
     def fit(self, X, y):
         X = self.preprocess(X)
-        self.net.fit(X, self.preprocess_y(y))
+        self.net.fit(X, y)
         return self
-
+ 
     def predict(self, X):
-        X = self.simple_preprocess(X)
+        X = self.preprocess(X)
         return self.net.predict(X)
-
+ 
     def predict_proba(self, X):
-        X = self.simple_preprocess(X)
+        X = self.preprocess(X)
         return self.net.predict_proba(X)
+
+ 
