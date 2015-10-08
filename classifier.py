@@ -116,6 +116,13 @@ class Classifier(BaseEstimator):
         X = sample_from_rotation_x( X )
         #X = X.transpose((0, 3, 1, 2))
         return X
+
+    def simple_preprocess(self, X):
+        X = (X / 255.)
+        X = X.astype(np.float32)
+        #X = sample_from_rotation_x( X )
+        X = X.transpose((0, 3, 1, 2))
+        return X
     
     def preprocess_y(self, y):
         y = sample_from_rotation_y(y)
@@ -127,9 +134,9 @@ class Classifier(BaseEstimator):
         return self
 
     def predict(self, X):
-        X = self.preprocess(X)
+        X = self.simple_preprocess(X)
         return self.net.predict(X)
 
     def predict_proba(self, X):
-        X = self.preprocess(X)
+        X = self.simple_preprocess(X)
         return self.net.predict_proba(X)
