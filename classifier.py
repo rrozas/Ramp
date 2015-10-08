@@ -2,10 +2,49 @@ import os
 os.environ["THEANO_FLAGS"] = "device=gpu"
 from sklearn.base import BaseEstimator
 import os
-from lasagne import layers, nonlinearities
+from lasagne import layers, nonlinearities, updates, init, objectives
 from lasagne.updates import nesterov_momentum
-from nolearn.lasagne import NeuralNet
+from nolearn.lasagne import NeuralNet, BatchIterator
 import numpy as np
+
+class EarlyStopping(object):
+
+    def __init__(self, patience=100, criterion='valid_loss',
+                 criterion_smaller_is_better=True):
+        self.patience = patience
+        if criterion_smaller_is_better is True:
+            self.best_valid = np.inf
+        else:
+            self.best_valid = -np.inf
+        self.best_valid_epoch = 0
+        self.best_weights = None
+        self.criterion = criterion
+        self.criterion_smaller_is_better = criterion_smaller_is_better
+
+    def __call__(self, nn, train_history):
+        current_valid = train_history[-1][self.criterion]
+        current_epoch = train_history[-1]['epoch']
+        if self.criterion_smaller_is_better:
+            cond = current_valid < self.best_valid
+        else:
+            cond = current_valid > self.best_valid
+        if cond:
+            self.best_valid = current_valid
+            self.best_valid_epoch = current_epoch
+            self.best_weights = nn.get_all_params_values()
+        elif self.best_valid_epoch + self.patience < current_epoch:
+            if nn.verbose:
+                print("Early stopping.")
+                print("Best {:s} was {:.6f} at epoch {}.".format(
+                    self.criterion, self.best_valid, self.best_valid_epoch))
+            nn.load_weights_from(self.best_weights)
+            if nn.verbose:
+                print("Weights set.")
+            raise StopIteration()
+
+    def load_best_weights(self, nn, train_history):
+        nn.load_weights_from(self.best_weights)
+
 
 def build_model(hyper_parameters):
     net = NeuralNet(
@@ -18,12 +57,14 @@ def build_model(hyper_parameters):
             ('conv3', layers.Conv2DLayer),
             ('pool3', layers.MaxPool2DLayer),
             ('hidden4', layers.DenseLayer),
+            ('dropout1', layers.DropoutLayer),
             ('hidden5', layers.DenseLayer),
             ('output', layers.DenseLayer),
             ],
         input_shape=(None, 3, 64, 64),
         use_label_encoder=True,
         verbose=1,
+        on_epoch_finished = [EarlyStopping(patience=20, criterion='valid_accuracy', criterion_smaller_is_better=False)],
         **hyper_parameters
         )
     return net
@@ -36,7 +77,12 @@ hyper_parameters = dict(
     output_num_units=18, output_nonlinearity=nonlinearities.softmax,
     update_learning_rate=0.01,
     update_momentum=0.9,
-    max_epochs=15,
+    max_epochs=30,dropout1_p=0.5,
+    hidden4_W=init.GlorotUniform(gain='relu'),
+    hidden5_W=init.GlorotUniform(gain='relu'),
+    output_W=init.GlorotUniform(),
+    batch_iterator_train=BatchIterator(batch_size=100)
+
 )
 
 
