@@ -6,6 +6,25 @@ from lasagne import layers, nonlinearities, updates, init, objectives
 from lasagne.updates import nesterov_momentum
 from nolearn.lasagne import NeuralNet, BatchIterator
 import numpy as np
+from itertools import repeat
+
+def sample_from_rotation_x( x ):
+    x_extends = []
+    y_extends = []
+    for i in range(x.shape[0]):
+        x_extends.extend([
+        np.array([x[i,:,:,0], x[i,:,:,1], x[i,:,:,2]]),
+        np.array([np.rot90(x[i,:,:,0]),np.rot90(x[i,:,:,1]), np.rot90(x[i,:,:,2])]),
+        np.array([np.rot90(x[i,:,:,0],2),np.rot90(x[i,:,:,1],2), np.rot90(x[i,:,:,2],2)]),
+        np.array([np.rot90(x[i,:,:,0],3),np.rot90(x[i,:,:,1],3), np.rot90(x[i,:,:,2],3)])
+        ])
+    return np.array(x_extends)
+
+def sample_from_rotation_y(y):
+    y_extends = []
+    for i in y:
+        y_extends.extend( repeat( i ,4) )
+    return np.array(y_extends)
 
 class EarlyStopping(object):
 
@@ -77,11 +96,11 @@ hyper_parameters = dict(
     output_num_units=18, output_nonlinearity=nonlinearities.softmax,
     update_learning_rate=0.01,
     update_momentum=0.9,
-    max_epochs=30,dropout1_p=0.5,
+    max_epochs=100,dropout1_p=0.5,
     hidden4_W=init.GlorotUniform(gain='relu'),
     hidden5_W=init.GlorotUniform(gain='relu'),
     output_W=init.GlorotUniform(),
-    batch_iterator_train=BatchIterator(batch_size=100)
+    batch_iterator_train=BatchIterator(batch_size=500)
 
 )
 
@@ -94,10 +113,12 @@ class Classifier(BaseEstimator):
     def preprocess(self, X):
         X = (X / 255.)
         X = X.astype(np.float32)
-        X = X.transpose((0, 3, 1, 2))
+        X = sample_from_rotation_x( X )
+        #X = X.transpose((0, 3, 1, 2))
         return X
     
     def preprocess_y(self, y):
+        y = sample_from_rotation_y(y)
         return y.astype(np.int32)
 
     def fit(self, X, y):
